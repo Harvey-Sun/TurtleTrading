@@ -11,14 +11,111 @@ Strategy_Name = 'TurtleTrading'
 INIT_CAP = 100000000
 START_DATE = '20130101'
 END_DATE = '20161231'
+fee_rate = 0.001
+
+D1 = 20  # 短线系统，20日ATR
+D2 = 55  # 长线系统
+num = 50  # 买入多少只股票
+unit_limit = 4.
 
 def initial(sdk):
     sdk.prepareData(['LZ_GPA_QUOTE_THIGH', 'LZ_GPA_QUOTE_TLOW', 'LZ_GPA_QUOTE_TCLOSE',
-                     'LZ_GPA_VAL_A_TCAP', 'LZ_GPA_SLCIND_STOP_FLAG'])
+                     'LZ_GPA_VAL_A_TCAP', 'LZ_GPA_SLCIND_STOP_FLAG', 'LZ_GPA_SLCIND_ST_FLAG'])
+
+    stock_list = sdk.getStockList()
+    close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-63:], columns=stock_list)
+    not_new = pd.notnull(close).all(axis=0)
+
+    st = pd.Series(sdk.getFieldData('LZ_GPA_SLCIND_ST_FLAG')[-1], index=stock_list)
+    not_st = pd.null(st)
+
+    not_new_not_st = stock_list[np.logical_and(not_new, not_st)]
+    cap = pd.Series(sdk.getFieldData('LZ_GPA_VAL_A_TCAP')[-1], index=stock_list)
+
+    cap[not_new_not_st].sort(inplace=True)
+    stock_pool = list(cap[:num].index)
+    sdk.setGlobal('stock_pool', stock_pool)
+
+    high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-(D1 + 2):-1], columns=stock_list)[stock_pool]
+    low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 2):-1], columns=stock_list)[stock_pool]
+    close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-(D1 + 2):-1], columns=stock_list)[stock_pool]
+    x1 = (high - low)[1:]
+    x2 = np.abs(high - close.shift(-1))[1:]
+    x3 = np.abs(low - close.shift(-1))[1:]
+    max23 = np.where(x2 > x3, x2, x3)
+    tr = np.where(x1 > max23, x1, x23)
+    atr = tr.mean(axis=0)
+    sdk.setGlobal('atr', atr)
+
+    stock_position = dict([i, 0] for i in stock_pool)
+    buy_prices = dict()
+    sdk.setGlobal('stock_position', stock_position)
+    sdk.setGlobal('buy_prices', buy_prices)
 
 
 def strategy(sdk):
-    pass
+    sdk.sdklog(sdk.getNowDate(), '================================')
+    stock_list = sdk.getStockList()
+    not_stop_stocks = stock_list[pd.null(sdk.getFieldData('LZ_GPA_SLCIND_STOP_FLAG')[-(D1 + 1):]).all(axis=0)]
+    stock_pool = sdk.getGlobal('stock_pool')
+    tradable_stocks = set(stock_pool) & set(not_stop_stocks)
+    quotes = sdk.getQuotes(tradable_stocks)
+
+    high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-D1:], columns=stock_list)[stock_pool]
+    low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-D1:], columns=stock_list)[stock_pool]
+    close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-D1:], columns=stock_list)[stock_pool]
+    x1 = (high - low).iloc[-1]
+    x2 = np.abs(high - close.shift(-1)).iloc[-1]
+    x3 = np.abs(low - close.shift(-1)).iloc[-1]
+    max23 = np.where(x2 > x3, x2, x3)
+    tr = np.where(x1 > max23, x1, x23)
+
+    atr_pre = sdk.getGlobal('atr')
+    atr = ((D1 - 1) * atr_pre + tr) / D1
+
+    max_high = high.max()
+    min_low = low.min()
+
+    net_value = sdk.getAccountInfo().previousAsset
+    unit = (net_value / num) * 0.01 / (atr * 100)  # 一单位，手
+    available_cash = sdk.getAccountInfo().availableCash
+    stock_position = sdk.getGlobal('stock_position')
+    buy_prices = sdk.getGlobal('buy_prices')
+    available_cash_one_stock = available_cash / (num - stock_position.values().sum() / unit_limit)
+
+    positions = sdk.getPositions()
+
+    orders = []
+    for stock in tradable_stocks:
+        today_open = quotes[stock]
+        buy_volume = unit[stock] * 100
+        money_needed = buy_volume * today_open * (1 + fee_rate)
+        if (stock_position[stock] == 0) & (close.iloc[-1][stock] > max_high[stock]) & (money_needed <= available_cash_one_stock):
+            order = [stock, today_open, buy_volume, 1]
+            orders.append(order)
+            stock_position[stock] = 1
+            buy_prices[stock] = today_open
+        elif (0 < stock_position[stock] < 4) & (close.iloc[-1][stock] > buy_prices[stock] + 0.5 * atr[stock]) & (money_needed <= available_cash_one_stock):
+            order = [stock, today_open, buy_volume, 1]
+            orders.append(order)
+            stock_position[stock] += 1
+            buy_prices[stock] = today_open
+        elif (stock_position[stock] > 0) & ((close.iloc[-1][stock] < min_low[stock]) | (close.iloc[-1][stock] < buy_prices[stock] - 2 * atr[stock])):
+            sell_volume = positions[stock].optPosition
+            order = [stock, today_open, sell_volume, -1]
+            orders.append(order)
+            stock_position[stock] = 0
+            del buy_prices[stock]
+        else:
+            pass
+    if orders:
+        sdk.makeOrders(orders)
+        sdk.sdklog('下单')
+        sdk.sdklog(np.array(orders))
+
+    sdk.setGlobal('atr', atr)
+    sdk.setGlobal('stock_position', stock_position)
+    sdk.setGlobal('buy_prices', buy_prices)
 
 
 config = {
@@ -29,8 +126,7 @@ config = {
     'endDate': END_DATE,
     'strategy': strategy,
     'initial': initial,
-    'preparePerDay': init_per_day,
-    'feeRate': 0.001,
+    'feeRate': fee_rate,
     'strategyName': Strategy_Name,
     'logfile': '%s.log' % Strategy_Name,
     'rootpath': 'C:/cStrategy/',
