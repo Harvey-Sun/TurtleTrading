@@ -27,9 +27,9 @@ def initial(sdk):
     not_new = pd.notnull(close).all(axis=0)
 
     st = pd.Series(sdk.getFieldData('LZ_GPA_SLCIND_ST_FLAG')[-1], index=stock_list)
-    not_st = pd.null(st)
+    not_st = pd.isnull(st)
 
-    not_new_not_st = stock_list[np.logical_and(not_new, not_st)]
+    not_new_not_st = pd.Series(stock_list)[list(np.logical_and(not_new, not_st))]
     cap = pd.Series(sdk.getFieldData('LZ_GPA_VAL_A_TCAP')[-1], index=stock_list)
 
     cap[not_new_not_st].sort(inplace=True)
@@ -40,11 +40,12 @@ def initial(sdk):
     low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 2):-1], columns=stock_list)[stock_pool]
     close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-(D1 + 2):-1], columns=stock_list)[stock_pool]
     x1 = (high - low)[1:]
-    x2 = np.abs(high - close.shift(-1))[1:]
-    x3 = np.abs(low - close.shift(-1))[1:]
+    x2 = np.abs(high - close.shift(1))[1:]
+    x3 = np.abs(low - close.shift(1))[1:]
     max23 = np.where(x2 > x3, x2, x3)
-    tr = np.where(x1 > max23, x1, x23)
+    tr = np.where(x1 > max23, x1, max23)
     atr = tr.mean(axis=0)
+    print atr
     sdk.setGlobal('atr', atr)
 
     stock_position = dict([i, 0] for i in stock_pool)
@@ -56,7 +57,7 @@ def initial(sdk):
 def strategy(sdk):
     sdk.sdklog(sdk.getNowDate(), '================================')
     stock_list = sdk.getStockList()
-    not_stop_stocks = stock_list[pd.null(sdk.getFieldData('LZ_GPA_SLCIND_STOP_FLAG')[-(D1 + 1):]).all(axis=0)]
+    not_stop_stocks = pd.Series(stock_list)[pd.isnull(sdk.getFieldData('LZ_GPA_SLCIND_STOP_FLAG')[-(D1 + 1):]).all(axis=0)]
     stock_pool = sdk.getGlobal('stock_pool')
     tradable_stocks = set(stock_pool) & set(not_stop_stocks)
     quotes = sdk.getQuotes(tradable_stocks)
@@ -64,24 +65,33 @@ def strategy(sdk):
     high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-D1:], columns=stock_list)[stock_pool]
     low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-D1:], columns=stock_list)[stock_pool]
     close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-D1:], columns=stock_list)[stock_pool]
+    print high
     x1 = (high - low).iloc[-1]
-    x2 = np.abs(high - close.shift(-1)).iloc[-1]
-    x3 = np.abs(low - close.shift(-1)).iloc[-1]
+    print x1
+    print np.abs(high - close.shift(1))
+    x2 = np.abs(high - close.shift(1)).iloc[-1]
+    print x2
+    x3 = np.abs(low - close.shift(1)).iloc[-1]
+    print x3
     max23 = np.where(x2 > x3, x2, x3)
-    tr = np.where(x1 > max23, x1, x23)
+    print max23
+    tr = np.where(x1 > max23, x1, max23)
+    print tr
 
     atr_pre = sdk.getGlobal('atr')
     atr = ((D1 - 1) * atr_pre + tr) / D1
+    print atr
 
     max_high = high.max()
     min_low = low.min()
 
     net_value = sdk.getAccountInfo().previousAsset
     unit = (net_value / num) * 0.01 / (atr * 100)  # 一单位，手
+    print unit
     available_cash = sdk.getAccountInfo().availableCash
     stock_position = sdk.getGlobal('stock_position')
     buy_prices = sdk.getGlobal('buy_prices')
-    available_cash_one_stock = available_cash / (num - stock_position.values().sum() / unit_limit)
+    available_cash_one_stock = available_cash / (num - sum(stock_position.values()) / unit_limit)
 
     positions = sdk.getPositions()
 
