@@ -6,14 +6,15 @@ import pandas as pd
 
 username = 'Harvey_Sun'
 password = 'P948894dgmcsy'
-Strategy_Name = 'TurtleTrading'
+Strategy_Name = 'TurtleTrading_20_10'
 
 INIT_CAP = 100000000
 START_DATE = '20130101'
 END_DATE = '20161231'
 fee_rate = 0.001
 
-D1 = 20  # 短线系统，20日ATR
+D1 = 20  # 短线系统，20日ATR，买入均线为D1日最高
+Ds = 10  # 断线系统，卖出均线为Ds日最低
 D2 = 55  # 长线系统
 num = 50  # 买入多少只股票
 unit_limit = 4.
@@ -79,7 +80,7 @@ def strategy(sdk):
     atr = ((D1 - 1) * atr_pre + tr) / D1
 
     max_high = high[:-1].max()
-    min_low = low[:-1].min()
+    min_low = low[-(Ds + 1):-1].min()
 
     net_value = sdk.getAccountInfo().previousAsset
     unit = np.floor((net_value / num) * 0.01 / (atr * 100))  # 一单位，手
