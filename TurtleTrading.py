@@ -6,7 +6,7 @@ import pandas as pd
 
 username = 'Harvey_Sun'
 password = 'P948894dgmcsy'
-Strategy_Name = 'TurtleTrading_20_10'
+Strategy_Name = 'TurtleTrading_20_10_season'
 
 INIT_CAP = 100000000
 START_DATE = '20130101'
@@ -77,12 +77,12 @@ def strategy(sdk):
 
     positions = sdk.getPositions()
     position_dict = dict([i.code, i.optPosition] for i in positions)
-    atr_pre = sdk.getGlobal('atr')
+
     stock_position = sdk.getGlobal('stock_position')
     buy_prices = sdk.getGlobal('buy_prices')
 
     season_start = sdk.getGlobal('season_start')
-    if today in season_start:
+    if today in season_start[1:]:  # 第一个季度的股票池已经计算出来，这里从第二个季度开始运行
         # 选取市值最小的50只非新非ST股票=================================================================================
         stock_list = sdk.getStockList()
         close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-63:], columns=stock_list)
@@ -101,25 +101,25 @@ def strategy(sdk):
         old_stock_pool = sdk.getGlobal('stock_pool')
         sdk.setGlobal('stock_pool', stock_pool)
         # 找到新加入的股票和被踢出的股票=================================================================================
-        old_out_stocks = sdk.getGlobal('out_stocks')
-        out_stocks = list(set(old_stock_pool) - set(stock_pool))
-        sdk.setGlobal('out_stocks', out_stocks + old_out_stocks)
-        new_stocks = list(set(stock_pool) - set(old_stock_pool))
+        out_stocks = list(set(position_dict.keys()) - set(stock_pool))
+        sdk.setGlobal('out_stocks', out_stocks)
 
-        high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-(D1 + 2):-1], columns=stock_list)[new_stocks]
-        low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 2):-1], columns=stock_list)[new_stocks]
-        close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-(D1 + 2):-1], columns=stock_list)[new_stocks]
-
+        atr_pre = sdk.getGlobal('atr')
+        stocks_to_cal_atr = list(set(stock_pool + out_stocks) -set(atr_pre.index))
+        high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-(D1 + 2):-1], columns=stock_list)[stocks_to_cal_atr]
+        low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 2):-1], columns=stock_list)[stocks_to_cal_atr]
+        close = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TCLOSE')[-(D1 + 2):-1], columns=stock_list)[stocks_to_cal_atr]
         x1 = (high - low)[1:]
         x2 = np.abs(high - close.shift(1))[1:]
         x3 = np.abs(low - close.shift(1))[1:]
         max23 = np.where(x2 > x3, x2, x3)
         tr = np.where(x1 > max23, x1, max23)
-        atr = pd.Series(tr.mean(axis=0), index=new_stocks)
-        atr = pd.concat([atr_pre, atr], axis=0)
+        atr_new = pd.Series(tr.mean(axis=0), index=stocks_to_cal_atr)
+
+        atr = pd.concat([atr_pre, atr_new], axis=0)[stock_pool + out_stocks]
         sdk.setGlobal('atr', atr)
 
-        for stock in new_stocks:
+        for stock in stocks_to_cal_atr:
             stock_position[stock] = 0
             buy_prices[stock] = 0
         sdk.setGlobal('stock_position', stock_position)
@@ -128,19 +128,15 @@ def strategy(sdk):
     atr_pre = sdk.getGlobal('atr')
     stock_list = sdk.getStockList()
     not_stop_stocks = pd.Series(stock_list)[pd.isnull(sdk.getFieldData('LZ_GPA_SLCIND_STOP_FLAG')[-(D1 + 1):]).all(axis=0)]
+    # not_stop_stocks排除了前D1日有过停牌的股票，这样不影响atr的准确性
     stock_pool = sdk.getGlobal('stock_pool')  # 50只市值最小的股票
     out_stocks = sdk.getGlobal('out_stocks')  # 被踢出的股票
     all_stocks = stock_pool + out_stocks  # 所有需要盯着日线的股票
     tradable_stocks = set(all_stocks) & set(not_stop_stocks)  # 当日可以交易的股票
     stock_pool_tradable = set(stock_pool) & set(not_stop_stocks)  # 50只小市值股其中可交易的股票
     out_stocks_tradable = set(out_stocks) & set(not_stop_stocks) & set(position_dict.keys())  # 小市值外的股票其中可清仓的股票
-    print stock_pool
-    print out_stocks
-    print tradable_stocks
-    print stock_pool_tradable
 
     quotes = sdk.getQuotes(tradable_stocks)
-    print quotes
 
     high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-(D1 + 1):], columns=stock_list)[all_stocks]
     low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 1):], columns=stock_list)[all_stocks]
@@ -151,6 +147,9 @@ def strategy(sdk):
     max23 = np.where(x2 > x3, x2, x3)
     tr = pd.Series(np.where(x1 > max23, x1, max23), index=all_stocks)
     atr = ((D1 - 1) * atr_pre + tr) / D1
+    # 计算出来的atr可能为0，原因是有股票长期停牌。
+    # 也有可能为空，股票退市了没有high、low等数据，这会导致后面的相关计算也为空。为了避免空值对策略的影响，在交易前，先判断股票当日是否是quote
+
 
     max_high = high[:-1].max()
     min_low = low[-(Ds + 1):-1].min()
@@ -160,9 +159,10 @@ def strategy(sdk):
     available_cash = sdk.getAccountInfo().availableCash
     available_cash_one_stock = available_cash / (num - sum(stock_position.values()) / unit_limit)
 
-
     orders = []
     for stock in stock_pool_tradable:
+        if stock not in quotes.keys():  # 交易前判断当日该股的quote是否为空
+            continue
         today_open = quotes[stock].open
         buy_volume = unit[stock] * 100
         money_needed = buy_volume * today_open * (1 + fee_rate)
@@ -196,8 +196,8 @@ def strategy(sdk):
             sell_volume = position_dict[stock]
             order = [stock, today_open, sell_volume, -1]
             clear_orders.append(order)
-            del stock_position[stock]
-            del buy_prices[stock]
+            stock_position[stock] = 0
+            buy_prices[stock] = 0
         else:
             pass
     sdk.makeOrders(clear_orders)
