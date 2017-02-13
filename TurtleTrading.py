@@ -98,11 +98,13 @@ def strategy(sdk):
 
         cap.sort_values(inplace=True)
         stock_pool = list(cap[:num].index)
+        old_stock_pool = sdk.getGlobal('stock_pool')
         sdk.setGlobal('stock_pool', stock_pool)
         # 找到新加入的股票和被踢出的股票=================================================================================
-        out_stocks = list(set(position_dict.keys()) - set(stock_pool))
-        sdk.setGlobal('out_stocks', out_stocks)
-        new_stocks = list(set(stock_pool) - set(position_dict.keys()))
+        old_out_stocks = sdk.getGlobal('out_stocks')
+        out_stocks = list(set(old_stock_pool) - set(stock_pool))
+        sdk.setGlobal('out_stocks', out_stocks + old_out_stocks)
+        new_stocks = list(set(stock_pool) - set(old_stock_pool))
 
         high = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_THIGH')[-(D1 + 2):-1], columns=stock_list)[new_stocks]
         low = pd.DataFrame(sdk.getFieldData('LZ_GPA_QUOTE_TLOW')[-(D1 + 2):-1], columns=stock_list)[new_stocks]
@@ -123,7 +125,7 @@ def strategy(sdk):
         sdk.setGlobal('stock_position', stock_position)
         sdk.setGlobal('buy_prices', buy_prices)
 
-
+    atr_pre = sdk.getGlobal('atr')
     stock_list = sdk.getStockList()
     not_stop_stocks = pd.Series(stock_list)[pd.isnull(sdk.getFieldData('LZ_GPA_SLCIND_STOP_FLAG')[-(D1 + 1):]).all(axis=0)]
     stock_pool = sdk.getGlobal('stock_pool')  # 50只市值最小的股票
@@ -131,7 +133,7 @@ def strategy(sdk):
     all_stocks = stock_pool + out_stocks  # 所有需要盯着日线的股票
     tradable_stocks = set(all_stocks) & set(not_stop_stocks)  # 当日可以交易的股票
     stock_pool_tradable = set(stock_pool) & set(not_stop_stocks)  # 50只小市值股其中可交易的股票
-    out_stocks_tradable = set(out_stocks) & set(not_stop_stocks)  # 小市值外的股票其中可交易的股票
+    out_stocks_tradable = set(out_stocks) & set(not_stop_stocks) & set(position_dict.keys())  # 小市值外的股票其中可清仓的股票
     print stock_pool
     print out_stocks
     print tradable_stocks
@@ -196,7 +198,6 @@ def strategy(sdk):
             clear_orders.append(order)
             del stock_position[stock]
             del buy_prices[stock]
-            out_stocks.remove(stock)
         else:
             pass
     sdk.makeOrders(clear_orders)
@@ -206,7 +207,6 @@ def strategy(sdk):
     sdk.setGlobal('atr', atr)
     sdk.setGlobal('stock_position', stock_position)
     sdk.setGlobal('buy_prices', buy_prices)
-    sdk.setGlobal('out_stocks', out_stocks)
 
 
 config = {
