@@ -6,7 +6,7 @@ import pandas as pd
 
 username = 'Harvey_Sun'
 password = 'P948894dgmcsy'
-Strategy_Name = 'TurtleTrading_20_10_season'
+Strategy_Name = 'TurtleTrading_20_10_mean_season'
 
 INIT_CAP = 100000000
 START_DATE = '20130101'
@@ -98,7 +98,6 @@ def strategy(sdk):
 
         cap.sort_values(inplace=True)
         stock_pool = list(cap[:num].index)
-        old_stock_pool = sdk.getGlobal('stock_pool')
         sdk.setGlobal('stock_pool', stock_pool)
         # 找到新加入的股票和被踢出的股票=================================================================================
         out_stocks = list(set(position_dict.keys()) - set(stock_pool))
@@ -152,7 +151,7 @@ def strategy(sdk):
 
 
     max_high = high[:-1].max()
-    min_low = low[-(Ds + 1):-1].min()
+    min_low = (low[-(Ds + 1):-1].min() + max_high) / 2
 
     net_value = sdk.getAccountInfo().previousAsset
     unit = np.floor((net_value / num) * 0.01 / (atr * 100))  # 一单位，手
